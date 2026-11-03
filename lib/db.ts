@@ -353,3 +353,159 @@ if (!globalForDb.companies) {
 }
 
 export const companies = globalForDb.companies;
+
+export const COMPANY_STATUSES = [
+  "new",
+  "researching",
+  "contacted",
+  "qualified",
+  "rejected",
+] as const;
+
+export const COMPANY_SORTS = [
+  "name",
+  "-name",
+  "created_at",
+  "-created_at",
+] as const;
+
+export type CompanySort = (typeof COMPANY_SORTS)[number];
+
+export type ListCompaniesParams = {
+  q?: string;
+  status?: CompanyStatus;
+  sort?: CompanySort;
+  limit?: number;
+  offset?: number;
+};
+
+export type ListCompaniesResult = {
+  items: Company[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export const DEFAULT_COMPANY_LIMIT = 50;
+export const MAX_COMPANY_LIMIT = 100;
+
+export function isCompanyStatus(value: string): value is CompanyStatus {
+  return (COMPANY_STATUSES as readonly string[]).includes(value);
+}
+
+export function isCompanySort(value: string): value is CompanySort {
+  return (COMPANY_SORTS as readonly string[]).includes(value);
+}
+
+export type CompanyWriteInput = {
+  name: string;
+  domain: string | null;
+  status: CompanyStatus;
+};
+
+export function getCompany(id: string): Company | undefined {
+  return companies.find((item) => item.id === id);
+}
+
+function nextCompanyId(): string {
+  const max = companies.reduce((highest, company) => {
+    const numeric = Number(company.id.replace(/^cmp_/, ""));
+    return Number.isFinite(numeric) ? Math.max(highest, numeric) : highest;
+  }, 0);
+
+  return `cmp_${String(max + 1).padStart(3, "0")}`;
+}
+
+export function createCompany(input: CompanyWriteInput): Company {
+  const now = new Date().toISOString();
+  const company: Company = {
+    id: nextCompanyId(),
+    name: input.name,
+    domain: input.domain,
+    status: input.status,
+    version: 1,
+    created_at: now,
+    updated_at: now,
+  };
+
+  companies.unshift(company);
+  return company;
+}
+
+export type UpdateCompanyResult =
+  | { ok: true; company: Company }
+  | { ok: false; status: 404 }
+  | { ok: false; status: 409; company: Company };
+
+export function updateCompany(
+  id: string,
+  input: CompanyWriteInput & { version: number },
+): UpdateCompanyResult {
+  const index = companies.findIndex((item) => item.id === id);
+
+  if (index < 0) {
+    return { ok: false, status: 404 };
+  }
+
+  const current = companies[index];
+
+  if (current.version !== input.version) {
+    return { ok: false, status: 409, company: current };
+  }
+
+  const updated: Company = {
+    ...current,
+    name: input.name,
+    domain: input.domain,
+    status: input.status,
+    version: current.version + 1,
+    updated_at: new Date().toISOString(),
+  };
+
+  companies[index] = updated;
+  return { ok: true, company: updated };
+}
+
+export function listCompanies(
+  params: ListCompaniesParams = {},
+): ListCompaniesResult {
+  const limit = params.limit ?? DEFAULT_COMPANY_LIMIT;
+  const offset = params.offset ?? 0;
+  const query = params.q?.trim().toLowerCase();
+
+  let items = companies.slice();
+
+  if (query) {
+    items = items.filter((company) => {
+      const nameMatch = company.name.toLowerCase().includes(query);
+      const domainMatch = company.domain?.toLowerCase().includes(query) ?? false;
+      return nameMatch || domainMatch;
+    });
+  }
+
+  if (params.status) {
+    items = items.filter((company) => company.status === params.status);
+  }
+
+  if (params.sort) {
+    const descending = params.sort.startsWith("-");
+    const field = descending ? params.sort.slice(1) : params.sort;
+    items.sort((a, b) => {
+      const left = a[field as "name" | "created_at"];
+      const right = b[field as "name" | "created_at"];
+      const comparison = left.localeCompare(right, undefined, {
+        sensitivity: "base",
+      });
+      return descending ? -comparison : comparison;
+    });
+  }
+
+  const total = items.length;
+
+  return {
+    items: items.slice(offset, offset + limit),
+    total,
+    limit,
+    offset,
+  };
+}
